@@ -1,0 +1,226 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  top.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  Top layer of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "core.nsl"
+
+declare top_module {
+  input     D0in[16];
+  input     D1in[16];
+  output    D0out[16];
+  output    D1out[16];
+  output    adr[16];
+  func_out  cs0, cs1;
+  func_out  ble0, bhe0;
+  func_out  ble1, bhe1;
+  input     in[16];
+  output    out[16];
+  input     rts,txd;
+  output    cts,rxd;
+  output    RST;
+  output    CS[2];
+  output    DA[3];
+  input     DDI[16];
+  output    DDO[16];
+  output    DIOR;
+  output    DIOW;
+  func_out rd(adr);
+  func_out wt(adr);
+  func_out rd_lo(adr);
+  func_out rd_hi(adr);
+  func_out wt_lo(adr,out);
+  func_out wt_hi(adr,out);
+}
+
+module top_module {
+
+  core      cpu;
+
+
+  {
+    cpu.rts = rts;
+    cpu.txd = txd;
+    cts = cpu.cts;
+    rxd = cpu.rxd;
+    RST = cpu.RST;
+    CS = cpu.CS;
+    DA = cpu.DA;
+    DDO = cpu.DDO;
+    cpu.DDI = DDI;
+    DIOR = cpu.DIOR;
+    DIOW = cpu.DIOW;
+  }
+
+  func cpu.rd {
+    rd(cpu.adr[16:1]);
+    if(~cpu.adr[17]) cs0();
+    if( cpu.adr[17]) cs1();
+    if(cpu.byte) {
+      if(~cpu.adr[0] &~cpu.adr[17]) { ble0(); cpu.in = {0x00,D0in[07:00]}; }
+      if(~cpu.adr[0] & cpu.adr[17]) { ble1(); cpu.in = {0x00,D1in[07:00]}; }
+      if( cpu.adr[0] &~cpu.adr[17]) { bhe0(); cpu.in = {0x00,D0in[15:08]}; }
+      if( cpu.adr[0] & cpu.adr[17]) { bhe1(); cpu.in = {0x00,D1in[15:08]}; }
+    }
+    if(~cpu.byte) {
+      if(~cpu.adr[17]) { cpu.in = D0in; ble0(); bhe0(); }
+      if( cpu.adr[17]) { cpu.in = D1in; ble1(); bhe1(); }
+    }
+  }
+
+  func cpu.wt {
+    wt(cpu.adr[16:01]);
+    if(~cpu.adr[17]) cs0();
+    if( cpu.adr[17]) cs1();
+    if(cpu.byte) {
+      if(~cpu.adr[0] &~cpu.adr[17]) { ble0(); D0out = cpu.out; }
+      if(~cpu.adr[0] & cpu.adr[17]) { ble1(); D1out = cpu.out; }
+      if( cpu.adr[0] &~cpu.adr[17]) { bhe0(); D0out = {cpu.out[7:0],0x00}; }
+      if( cpu.adr[0] & cpu.adr[17]) { bhe1(); D1out = {cpu.out[7:0],0x00}; }
+    }
+    if(~cpu.byte) {
+      if(~cpu.adr[17]) { D0out = cpu.out; ble0(); bhe0(); }
+      if( cpu.adr[17]) { D1out = cpu.out; ble1(); bhe1(); }
+    }
+  }
+
+  func cpu.erd any {
+    cpu.byte: any {
+      ~cpu.adr[0]: cpu.in = rd_lo(cpu.adr[16:01]).in;
+       cpu.adr[0]: cpu.in = {0x00 , rd_lo(cpu.adr[16:01]).in[15:08]};
+    }
+    ~cpu.byte: cpu.in = rd_lo(cpu.adr[16:01]).in;
+  }
+
+  func cpu.ewt any {
+    cpu.byte: any {
+      ~cpu.adr[0]: wt_lo(cpu.adr[16:01],cpu.out);
+       cpu.adr[0]: wt_hi(cpu.adr[16:01],{cpu.out[7:0],0x00});
+    }
+    ~cpu.byte: {
+      wt_lo(cpu.adr[16:01],cpu.out);
+      wt_hi();
+    }
+  }
+
+}/* end of top */
+
+#include "div4.nsl"
+
+declare top {
+  inout  D0[16];
+  inout  D1[16];
+  output    A[16];
+  output    OE, WE;
+  output    CS0, CS1;
+  output    BE0, BE1, BE2, BE3;
+    
+  input     IN[16];
+  output    OUT[16];
+  output    WEL, WEH;
+    
+  input     rts,txd;
+  output    cts,rxd;
+    
+  output    ATA_RST;
+  output    ATA_CS[2];
+  output    ATA_DA[3];
+  inout  ATA_DD[16];
+  output    ATA_DIOR;
+  output    ATA_DIOW;
+  output    ATA_DMACK;
+
+  input     WE_enable;
+
+}
+
+module top {
+
+  top_module cpu;
+
+  {
+    ATA_RST = cpu.RST;
+    ATA_CS = cpu.CS;
+    ATA_DA = cpu.DA;
+    if( ~cpu.DIOW ) ATA_DD = cpu.DDO;
+    if( ~cpu.DIOR ) cpu.DDI = ATA_DD;
+/*
+    cpu.DDI = ATA_DD;
+    if( ~ATA_DIOR ) cpu.DDI = DD;
+    if( ~cpu.DIOW ) ATA_DD = cpu.DDO;
+*/
+    ATA_DIOR = cpu.DIOR;
+    ATA_DIOW = cpu.DIOW;
+    ATA_DMACK = 0b1;
+
+    cts = cpu.cts;
+    rxd = cpu.rxd;
+    cpu.rts = rts;
+    cpu.txd = txd;
+
+    cpu.in = IN;
+    OUT = cpu.out;
+    WEL = cpu.wt_lo;
+    WEH = cpu.wt_hi;
+
+    OE = ~cpu.rd;
+    WE = ~(cpu.wt & WE_enable);
+    CS0 = ~cpu.cs0;
+    CS1 = ~cpu.cs1;
+    BE0 = ~cpu.ble0;
+    BE1 = ~cpu.bhe0;
+    BE2 = ~cpu.ble1;
+    BE3 = ~cpu.bhe1;
+    A = cpu.adr;
+
+    cpu.D0in = D0;
+    cpu.D1in = D1;
+
+    any {
+      cpu.wt & cpu.cs0: D0 = cpu.D0out;
+      cpu.wt & cpu.cs1: D1 = cpu.D1out;
+    }
+
+  }
+
+}/* top */

@@ -1,0 +1,17 @@
+POP-11: PDP-11 compatible On Programmable chip
+
+This software processor core IP is compatible with PDP-11/40.
+POP-11 has most parts of PDP-11/40, it has memory management unit,
+console unit and disk controller. POP-11 doesn't have floating point unit yet,
+but it can boot UNIX V6.
+
+The POP-11 is free software.  See the file COPYING for copying permission.
+
+The `SRC' directory includes all files of POP-11.
+The `photos' directory includes some photographs of POP-11.
+The `SIM' directory includes a booting UNIX environment on POP-11.
+Type 'make all' in the SIM directory to run UNIX on simulation.
+It will requires NSL license file from http://www.overtone.co.jp/
+
+Yoshihiro Iida, Oct 2004
+updated Nov. 2011 by Naohiko Shimizu

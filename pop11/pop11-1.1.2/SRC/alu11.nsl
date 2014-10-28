@@ -1,0 +1,257 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  alu11.nsl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  ALU of POP-11
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*
+*    Naohiko Shimizu(nshimizu^ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "cla16.nsl"
+
+declare bittest {
+  input     in[16], bi;
+  output    n,z;
+  func_in do(in,bi);
+}
+
+module bittest {
+  func do any {
+    (~bi): { n = in[15]; z = ~|in; }
+    ( bi): { n = in[07]; z = ~|in[7:0]; }
+  }
+}
+
+declare alu11 {
+  input    src[16], dst[16];
+  input    ni, ci, bi;
+  output   out[16];
+  output   ccmask[4], ccout[4];
+  func_out cc(ccmask, ccout);
+  func_in inc2(src);
+  func_in dec2(src);
+  func_in inc(src);
+  func_in dec(src);
+  func_in clr(src);
+  func_in com(src);
+  func_in neg(src);
+  func_in adc(src);
+  func_in sbc(src);
+  func_in tst(src);
+  func_in mmu(src);
+  func_in ror(src);
+  func_in rol(src);
+  func_in asr(src);
+  func_in asl(src);
+  func_in sxt(src);
+  func_in mov(src);
+  func_in cmp(src,dst);
+  func_in bit(src,dst);
+  func_in bic(src,dst);
+  func_in bis(src,dst);
+  func_in add(src,dst);
+  func_in sub(src,dst);
+  func_in exor(src,dst);
+  func_in swab(src);
+}
+
+module alu11 {
+
+  cla16    cla;
+  bittest  btt;
+
+  func inc2 out = cla.do(src,0x0002,0b0,0b0).out;
+  func dec2 out = cla.do(src,0xfffe,0b0,0b0).out;
+
+  func inc {
+    out = cla.do(0x0000,src,0b1,bi).out;
+    cc(0b1110, {cla.n,cla.z,cla.v,0b0});
+  }
+
+  func dec {
+    out = cla.do(0xffff,src,0b0,bi).out;
+    cc(0b1110, {cla.n,cla.z,cla.v,0b0});
+  }
+
+  func clr {
+    out = 0x0000;
+    cc(0b1111, 0b0100);
+  }
+
+  func com {
+    out = ~src;
+    btt.do(out,bi);
+    cc(0b1111, {btt.n,btt.z,0b01});
+  }
+
+  func neg {
+    cla.do(0x0000,~src,0b1,bi);
+    out = cla.out;
+    cc(0b1111, {cla.n,cla.z,cla.v,~cla.z});
+  }
+
+  func adc {
+    out = cla.do(0x0000,src,ci,bi).out;
+    cc(0b1111, {cla.n,cla.z,cla.v,cla.c});
+  }
+
+  func sbc {
+    out = cla.do(0xffff,src,~ci,bi).out;
+    cc(0b1111, {cla.n,cla.z,cla.v,~cla.c});
+  }
+    
+  func tst {
+    btt.do(src,bi);
+    cc(0b1111, {btt.n,btt.z,0b00});
+  }
+
+  func mmu {
+    btt.do(src,bi);
+    cc(0b1110, {btt.n,btt.z,0b00});
+  }
+
+  func ror {
+    if(~bi) {
+      out = {ci,src[15:1]};
+      btt.do(out,0b0);
+    }
+    if(bi) {
+      out = {0x00,ci,src[7:1]};
+      btt.do(out,0b1);
+    }
+    cc(0b1111, {btt.n,btt.z,(ci^src[0]),src[0]});
+  }
+
+  func rol {
+    if(~bi) {
+      out = {src[14:0],ci};
+      btt.do(out,0b0);
+      cc(0b1111, {btt.n,btt.z,(ci^src[15]),src[15]});
+    }
+    if(bi) {
+      out = {0x00,src[6:0],ci};
+      btt.do(out,0b1);
+      cc(0b1111, {btt.n,btt.z,(ci^src[7]),src[7]});
+    }
+  }
+
+  func asr {
+    if(~bi) {
+      out = {src[15],src[15:1]};
+      btt.do(out,0b0);
+      cc(0b1111, {btt.n,btt.z,(src[15]^src[0]),src[0]});
+    }
+    if(bi) {
+      out = {0x00,src[7],src[7:1]};
+      btt.do(out,0b1);
+      cc(0b1111, {btt.n,btt.z,(src[7]^src[0]),src[0]});
+    }
+  }
+
+  func asl {
+    if(~bi) {
+      out = {src[14:0],0b0};
+      btt.do(out,0b0);
+      cc(0b1111, {btt.n,btt.z,(src[15]^src[14]),src[15]});
+    }
+    if(bi) {
+      out = {0x00,src[6:0],0b0};
+      btt.do(out,0b1);
+      cc(0b1111, {btt.n,btt.z,(src[7]^src[6]),src[7]});
+    }
+  }
+
+  func sxt {
+    out = 16#ni;
+    cc(0b0100, {0b0,~ni,0b00});
+  }
+
+  func mov {
+    if(~bi) out = src;
+    if( bi) out = 16#src[7:0];
+    btt.do(src,bi);
+    cc(0b1110, {btt.n,btt.z,0b00});
+  }
+
+  func cmp {
+    cla.do(~dst,src,0b1,bi);
+    cc(0b1111, {cla.n,cla.z,cla.v,~cla.c});
+  }
+    
+  func bit {
+    btt.do(dst & src,bi);
+    cc(0b1110, {btt.n,btt.z,0b00});
+  }
+
+  func bic {
+    out = dst &~src;
+    btt.do(out,bi);
+    cc(0b1110, {btt.n,btt.z,0b00});
+  }
+
+  func bis {
+    out = dst | src;
+    btt.do(out,bi);
+    cc(0b1110, {btt.n,btt.z,0b00});
+  }
+
+  func add {
+    out = cla.do(dst,src,0b0,0b0).out;
+    cc(0b1111, {cla.n,cla.z,cla.v,cla.c});
+  }
+    
+  func sub {
+    out = cla.do(~dst,src,0b1,0b0).out;
+    cc(0b1111, {cla.n,cla.z,cla.v,~cla.c});
+  }
+
+  func exor {
+    out = dst ^ src;
+    btt.do(out,0b0);
+    cc(0b1100, {btt.n,btt.z,0b00});
+  }
+
+  func swab {
+    out = {src[7:0] , src[15:8]};
+    btt.do(out,0b1);
+    cc(0b1111, {btt.n,btt.z,0b00});
+  }
+
+}/* alu11 */

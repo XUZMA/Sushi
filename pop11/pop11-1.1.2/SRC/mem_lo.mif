@@ -1,0 +1,23 @@
+WIDTH=8;
+DEPTH=2048;
+
+ADDRESS_RADIX=DEC;
+DATA_RADIX=HEX;
+
+CONTENT BEGIN
+	0 : c6;
+	1 : 00;
+	2 : 03;
+	3 : c1;
+	4 : 0a;
+	5 : c9;
+	6 : 21;
+	7 : e1;
+	8 : 00;
+	9 : e1;
+	10 : 05;
+	11 : c9;
+	12 : fe;
+	13 : 07;
+	[14..2047] : 00;
+END;

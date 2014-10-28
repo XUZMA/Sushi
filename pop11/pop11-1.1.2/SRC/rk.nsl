@@ -1,0 +1,271 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  rk.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  RK disk control protcol converter of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "ide.nsl"
+#include "cnt2.nsl"
+
+declare rk {
+  func_in  rkda_rd;
+
+  func_in  rkba_rd;
+
+  func_in  rkwc_rd;
+
+  func_in  rkcs_rd;
+
+  input    rk_in[16];
+  output   rk_out[16];
+
+  func_in  mem_ack;
+  output   mem_adr[18];
+  output   mem_out[16];
+  input    mem_in[16];
+
+  func_out irq;
+  func_out active;
+
+  output   RST;
+  output   CS[2];
+  output   DA[3];
+  input    DDI[16];
+  output   DDO[16];
+  output   DIOR;
+  output   DIOW;
+
+  func_in rkda_wt(rk_in);
+  func_in rkba_wt(rk_in);
+  func_in rkwc_wt(rk_in);
+  func_in rkcs_wt(rk_in);
+  func_out mem_read(mem_adr);
+  func_out mem_write(mem_adr,mem_out);
+}
+
+module rk {
+
+  inc18    rkinc;
+  ide      ata;
+  cnt2     rkcnt;
+
+  reg   RKDA[16]=0;
+  reg   RKBA[16]=0;
+  reg   RKWC[16]=0;
+  reg   RKCS[9]=0;
+
+  reg   rk_buf[16]=0;
+  reg   rk_cnt[8]=0;
+
+
+
+#define CS_ERR  RKCS[8]
+#define CS_RDY  RKCS[7]
+#define CS_INT  RKCS[6]
+#define CS_XMEM RKCS[5:4]
+#define CS_COM  RKCS[3:1]
+#define CS_SW   RKCS[0]
+
+  {
+    RST = ata.RST;
+    CS = ata.CS;
+    DA = ata.DA;
+    DDO = ata.DDO;
+    ata.DDI = DDI;
+    DIOR = ata.DIOR;
+    DIOW = ata.DIOW;
+  }
+
+  func rkda_rd rk_out = RKDA;
+  func rkba_rd rk_out = RKBA;
+  func rkwc_rd rk_out = RKWC;
+  func rkcs_rd rk_out = {CS_ERR,(7#0b0),CS_RDY,CS_INT,CS_XMEM,CS_COM,CS_SW};
+  func rkda_wt RKDA := rk_in;
+  func rkba_wt RKBA := rk_in;
+  func rkwc_wt RKWC := {rk_in[15:8],0x00};
+  func rkcs_wt RKCS := {rk_in[15],rk_in[7:0]};
+
+  {
+    state_name  ready, read0, read1, write0, write1,
+      init0, init1, init2, init3, init4, init5, init6, init7, init8, init9, init10, init11,
+      last0, last1, last2, wait0, wait1;
+    first_state ready;
+    state ready {
+      if(CS_SW) goto init0;
+    }
+
+    state init0 {
+      ata.ata_rd( ATA_STATUS ); /* If BSY = 0 & DRQ = 0 */
+      if( ATA_RDY & ~ATA_BSY & ~ATA_DRQ ) goto init1;
+    }
+
+    state init1 {
+      ata.ata_wt( ATA_DEVHEAD, 0x0040 ); /* If uses Slave, set to 0x0050 */
+      if( ATA_RDY ) goto wait0;
+    }
+
+    state wait0 {
+      rkcnt.do();
+      if( rkcnt.cnt2_rdy ) goto init2; /* wait 400ns */
+    }
+
+    state init2 {
+      ata.ata_rd( ATA_STATUS ); /* If BSY = 0 & DRQ = 0 */
+      if( ATA_RDY & ~ATA_BSY & ~ATA_DRQ ) goto init3;
+    }
+
+    state init3 {
+      ata.ata_wt( ATA_DEVCTRL, 0x0002 ); /* Negate nIEN */
+      if( ATA_RDY ) goto init4;
+    }
+
+    state init4 {
+      rkinc.add1( {0b0000000000,~RKWC[15:8]} );
+      ata.ata_wt( ATA_SECCNT, rkinc.out[15:0] ); /* one's compliment of RKWC + 1 */
+      if( ATA_RDY ) goto init5;
+    }
+      
+    state init5 {
+      ata.ata_wt( ATA_SECNUM, {0x00,RKDA[7:0]} ); /* LBA[7:0] */
+      if( ATA_RDY ) goto init6;
+    }
+
+    state init6 {
+      ata.ata_wt( ATA_CYLLOW, {0x00,RKDA[15:8]} ); /* LBA[15:8 */
+      if( ATA_RDY ) goto init7;
+    }
+      
+    state init7 {
+      ata.ata_wt( ATA_CYLHIGH, 0x0000 ); /* LBA[23:16] */
+      if( ATA_RDY ) goto init8;
+    }
+
+    state init8 {
+      ata.ata_wt( ATA_DEVHEAD, 0x0040 ); /* LBA[27:24] and set LBA */
+      if( ATA_RDY ) goto init9;
+    }
+
+    state init9 {
+      if(CS_COM == 0b001) ata.ata_wt( ATA_COMMAND, ATA_WRITE );
+      if(CS_COM == 0b010) ata.ata_wt( ATA_COMMAND, ATA_READ );
+      if( ATA_RDY ) goto wait1;
+    }
+
+    state wait1 {
+      rkcnt.do();
+      if( rkcnt.cnt2_rdy ) goto init10; /* wait 400ns */
+    }
+
+    state init10 {
+      ata.ata_rd( ATA_ALTER );
+      if( ATA_RDY ) goto init11;
+    }
+
+    state init11 {
+      ata.ata_rd( ATA_STATUS );
+      if( ATA_RDY & ~ATA_BSY & ATA_DRQ & (CS_COM == 0b001) ) goto write0;
+      if( ATA_RDY & ~ATA_BSY & ATA_DRQ & (CS_COM == 0b010) ) goto read0;
+      if( ATA_ERR ) RKCS := {0b1,CS_RDY,CS_INT,CS_XMEM,CS_COM,CS_SW};
+    }
+
+    state read0 {
+      ata.ata_rd( ATA_DATA );
+      if( ATA_RDY ) {
+        rk_buf := ata.out;
+        RKWC := rkinc.add1( {0b00,RKWC} ).out[15:0];
+        goto read1;
+      }
+    }
+
+    state read1 {
+      active();
+      mem_write( {CS_XMEM,RKBA}, rk_buf );
+      if( mem_ack ) {
+        rkinc.add2( {CS_XMEM,RKBA} );
+        RKBA := rkinc.out[15:0];
+        RKCS := {RKCS[8:6],rkinc.out[17:16],RKCS[3:0]}; /* Memory address + 2 */
+        if(~|RKWC[7:0] &~|RKWC[15:8] ) goto last0; /* If RKWC is 0000, finish */
+        if(~|RKWC[7:0] & |RKWC[15:8] ) goto init10; /* If RKWC is like ff00, continue routine */
+        if( |RKWC[7:0] ) goto read0;
+      }
+    }
+
+    state write0 {
+      active();
+      mem_read( {CS_XMEM,RKBA} );
+      if(mem_ack) {
+        rk_buf := mem_in;
+        RKWC := rkinc.add1( {0b00,RKWC} ).out[15:0];
+        goto write1;
+      }
+    }
+
+    state write1 {
+      ata.ata_wt( ATA_DATA, rk_buf );
+      if( ATA_RDY ) {
+        rkinc.add2( {CS_XMEM,RKBA} );
+        RKBA := rkinc.out[15:0];
+        RKCS := {RKCS[8:6],rkinc.out[17:16],RKCS[3:0]}; /* Memory address + 2 */
+        if(~|RKWC[7:0] &~|RKWC[15:8] ) goto last0; /* If RKWC is 0000, finish */
+        if(~|RKWC[7:0] & |RKWC[15:8] ) goto init10; /* If RKWC is like ff00, continue routine */
+        if( |RKWC[7:0] ) goto write0;
+      }
+    }
+
+    state last0 {
+      ata.ata_rd( ATA_ALTER );
+      if( ATA_RDY ) goto last1;
+    }
+
+    state last1 {
+      ata.ata_rd( ATA_STATUS );
+      if( ATA_RDY ) goto last2;
+    }
+
+    state last2 {
+      RKCS := {0b0,0b1,CS_INT,CS_XMEM,0b000,0b0};
+      if(CS_INT) irq();
+      goto ready;
+    }
+
+  }/* stage */
+}/* module */

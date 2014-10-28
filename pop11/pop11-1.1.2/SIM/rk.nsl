@@ -1,0 +1,146 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  rk.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  RK disk control protcol converter of POP-11 for UNIX simulation
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "inc16.nsl"
+#include "inc21.nsl"
+#include "rk.h"
+
+module rk {
+
+  inc16    rk_inc;
+  inc21    rk_inc2;
+
+  reg   RKDA[13]=0;
+  reg   RKBA[16]=0;
+  reg   RKWC[16]=0;
+  reg   RKCS[9]=0;
+
+  reg   RKBC[21]=0;
+  reg   rk_buf[16]=0;
+  reg   end_flag=0;
+
+
+
+#define CS_ERR  RKCS[8]
+#define CS_RDY  RKCS[7]
+#define CS_INT  RKCS[6]
+#define CS_XMEM RKCS[5:4]
+#define CS_COM  RKCS[3:1]
+#define CS_SW   RKCS[0]
+
+
+  func rkda_rd rk_out = {0o0,RKDA};
+  func rkba_rd rk_out = RKBA;
+  func rkwc_rd rk_out = RKWC;
+  func rkcs_rd rk_out = {CS_ERR,(7#0b0),CS_RDY,CS_INT,CS_XMEM,CS_COM,CS_SW};
+  func rkda_wt RKDA := rk_in[12:00];
+  func rkba_wt RKBA := rk_in;
+  func rkwc_wt RKWC := {rk_in[15:8],0x00};
+  func rkcs_wt RKCS := {rk_in[15],rk_in[7:0]};
+
+  {
+    state_name ready, read0, read1, write0, write1, fin;
+    first_state ready;
+    state ready {
+      if(CS_SW) RKBC := {RKDA,0x00};
+      if(CS_SW) any {
+        CS_COM==0b001: goto write0;
+        CS_COM==0b010: goto read0;
+      }
+    }
+
+    state read0 {
+      disk_read(RKBC);
+      if(disk_ack) {
+        RKWC := rk_inc.do(RKWC).out;
+        RKBC := rk_inc2.do(RKBC).out;
+        if(~|rk_inc.out) end_flag := 0b1;
+        rk_buf := disk_in;
+        goto read1;
+      }
+    }
+
+    state read1 {
+      active();
+      mem_write({CS_XMEM,RKBA}, rk_buf);
+      rk_inc2.do({0x0,CS_XMEM,RKBA[15:01]});
+      RKBA := {rk_inc2.out[14:0],0b0};
+      RKCS := {RKCS[8:6],rk_inc2.out[16:15],RKCS[3:0]};
+      if(~end_flag) goto read0;
+      if( end_flag) goto fin;
+    }
+
+    state write0 {
+      active();
+      mem_read({CS_XMEM,RKBA});
+      if(mem_ack) {
+        rk_buf := mem_in;
+        RKWC := rk_inc.do(RKWC).out;
+        rk_inc2.do({0x0,CS_XMEM,RKBA[15:01]});
+        RKBA := {rk_inc2.out[14:0],0b0};
+        RKCS := {RKCS[8:6],rk_inc2.out[16:15],RKCS[3:0]};
+        if(~|rk_inc.out) end_flag := 0b1;
+        goto write1;
+      }
+    }
+
+    state write1 {
+      disk_write(RKBC, rk_buf);
+      if(disk_ack) {
+        RKBC := rk_inc2.do(RKBC).out;
+        if(~end_flag) goto write0;
+        if( end_flag) goto fin;
+      }
+    }
+
+    state fin {
+      RKCS := {0b0,0b1,CS_INT,CS_XMEM,0b000,0b0};
+      if(CS_INT) irq();
+      end_flag := 0b0;
+      goto ready;
+    }
+  }
+
+}/* end_flag of rk */

@@ -1,0 +1,74 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  define.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  Configuration file of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp), Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+
+/*
+ * If needs RDY signal from memory, define as "rdy"
+ * else define as "0b1"
+ */
+#define RDY rdy
+#define EIS 0b1
+#define MMU 0b1
+
+#define INDR (dp.opc[3])
+#define SPPC (dp.opc[2] & dp.opc[1])
+#define MODE (dp.opc[5:4])
+#define AUTO_INC (dp.opc[4])
+#define AUTO_DEC (dp.opc[5])
+
+#define WORD 0b0
+#define BYTE dp.opc[15]
+
+/* Trap Vector */
+#define TRAP_BUS {0b0,0o00004}
+#define TRAP_ERR {0b0,0o00010}
+#define TRAP_BPT {0b0,0o00014}
+#define TRAP_IOT {0b0,0o00020}
+#define TRAP_POW {0b0,0o00024}
+#define TRAP_EMT {0b0,0o00030}
+#define TRAP_SVC {0b0,0o00034}
+#define TRAP_SEG {0b0,0o00250}
+
+#define TRACE (dp.psw[4])

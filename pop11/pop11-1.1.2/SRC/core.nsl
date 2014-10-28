@@ -1,0 +1,413 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  core.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  Processor core of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu^ip-arch.jp), Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "arbiter.nsl"
+#include "pop11.nsl"
+#include "inc18.nsl"
+#include "timer.nsl"
+#include "rk.nsl"
+#include "cla12.nsl"
+#include "rs232c/RS232C_IF.nsl"
+/*
+#define BUS_ERROR 0b0
+*/
+#define BUS_ERROR (PA[17:16] == 0b10)
+
+declare segment_reg {
+  input     mode;
+  input     page[3];
+  input     PARin[12];
+  input     PDRin[11];
+  output    PARout[12];
+  output    PDRout[11];
+  func_in seg_read(mode,page);
+  func_in writePAR(mode,page,PARin);
+  func_in writePDR(mode,page,PDRin);
+}
+
+declare core {
+  input     in[16];
+  output    out[16];
+  output    adr[18];
+  output    byte;
+  input     dsk_in[16];
+  output    dsk_out[16];
+  output    dsk_adr[21];
+  func_in   rdy;
+
+  input     rts,txd;
+  output    cts,rxd;
+
+  output    RST;
+  output    CS[2];
+  output    DA[3];
+  input     DDI[16];
+  output    DDO[16];
+  output    DIOR;
+  output    DIOW;
+  func_out rd(adr, byte);
+  func_out wt(adr, out, byte);
+  func_out erd(adr, byte);
+  func_out ewt(adr, out, byte);
+  func_out dsk_rd(dsk_adr);
+  func_out dsk_wt(dsk_adr, dsk_out);
+}
+
+module core {
+
+  func_self done;
+
+  /* For MMU */
+  func_self access_err, length_err, bus_err;
+  wire       in_sel[16], out_sel[16], adr_sel[18];
+  func_self mrd(adr_sel);
+  func_self mwt(adr_sel, out_sel);
+  reg       mmu_buf[16], PA[18];
+  reg       SSR2[16];
+  reg    ssr0_mode[2]=0, ssr0_page[3]=0, ssr0_sw=0, non_resident=0, readonly_error=0, length_error=0;
+
+  pop11     cpu;
+  RS232C_IF rs232;
+  timer     Timer;
+  arbiter   Arbiter;
+  cla12     mmu_adder;
+  segment_reg   seg;
+  rk        Rk;
+
+  reg    rs232_sw=1;
+  reg    timer_irq_enable=0;
+  reg    send_irq_enable=0, recv_irq_enable=0;
+  reg    send_s0=0, send_s1=0, recv_s0=0, recv_s1=0;
+
+  wire       APF[3], BN[7], nBN[7], DIB[6], ACF[2], ED, AIB, PLF[7];
+
+
+
+  {
+
+    /* Interruput Control */
+    Arbiter.cpu_pri = cpu.pswout[7:5];
+    if(Arbiter.int) cpu.irq_in();
+    if(cpu.int_ack) { Arbiter.ack(); cpu.dati = {0x00,Arbiter.vector}; }
+
+    /* Serial Interface Control */
+    rs232.do();
+    cts = rs232.cts;
+    rxd = rs232.rxd;
+    rs232.txd = txd;
+    rs232.rts = rts;
+
+    /* Timer Interruput Logic */
+    if(Timer.irq & timer_irq_enable) Arbiter.irq0();
+
+    /* Serial Interface Interrupts Logic */
+    send_s0 := rs232.sv;
+    send_s1 := send_s0;
+    recv_s0 := rs232.rv;
+    recv_s1 := recv_s0;
+    if(send_s0 & ~send_s1 & send_irq_enable) Arbiter.irq3();
+    if(recv_s0 & ~recv_s1 & recv_irq_enable) Arbiter.irq2();
+
+    if(Rk.irq) Arbiter.irq1();
+    RST = Rk.RST;
+    CS = Rk.CS;
+    DA = Rk.DA;
+    DDO = Rk.DDO;
+    Rk.DDI = DDI;
+    DIOR = Rk.DIOR;
+    DIOW = Rk.DIOW;
+
+    APF = cpu.adrs[15:13];
+    BN  = cpu.adrs[12:06];
+    nBN = ~cpu.adrs[12:06];
+    DIB = cpu.adrs[05:00];
+    ACF = seg.PDRout[1:0];
+    ED  = seg.PDRout[2];
+    AIB = seg.PDRout[3];
+    PLF = seg.PDRout[10:04];
+
+  }
+/*
+ * RK Disk Drive
+ */
+  func Rk.mem_write { wt(Rk.mem_adr, Rk.mem_out, WORD); Rk.mem_ack(); }
+  func Rk.mem_read  { Rk.mem_in = rd(Rk.mem_adr, WORD).in; Rk.mem_ack(); }
+
+/*
+ * Memory Map Controller
+ */
+#define NO_MAPPED (~(adr_sel[17:13] == 0b11111))
+#define MAPPED    ((adr_sel[17:13] == 0b11111)&( adr_sel[12]))
+#define EABMAP    ((adr_sel[17:13] == 0b11111)&(~adr_sel[12]))
+#define MAPPING   adr_sel[11:00]
+#define SEGMENT   adr_sel[11:05]
+#define PDR_READ  ({0b0,seg.PDRout[10:04],0b0,seg.PDRout[3],0b00,seg.PDRout[2:0],0b0})
+#define PAR_READ  ({0b0000,seg.PARout})
+
+  func mrd any {
+    /* Physical memory read */
+    NO_MAPPED: { done(); in_sel = rd(adr_sel, cpu.byte).in; }
+
+    EABMAP: { done(); in_sel = erd({0o00,adr_sel[11:00]}, cpu.byte).in; }
+    MAPPED: any {
+      /* Processor Status Word */
+      MAPPING == 0o7776: { done(); in_sel = cpu.pswout; }
+
+      /* Segment Registers */
+      MAPPING == 0o7576: { done(); in_sel = SSR2; } /* SSR2 */
+      MAPPING == 0o7572: { done(); in_sel = 
+        {non_resident,length_error,readonly_error,(0b000000),ssr0_mode,0b0,ssr0_page,ssr0_sw}; } /* SSR0 */
+      SEGMENT == {0o23,0b1}: { done(); in_sel = PAR_READ; seg.seg_read(0b0,adr_sel[3:1]); } /* KISA0-7 */
+      SEGMENT == {0o23,0b0}: { done(); in_sel = PDR_READ; seg.seg_read(0b0,adr_sel[3:1]); } /* KISD0-7 */
+      SEGMENT == {0o76,0b1}: { done(); in_sel = PAR_READ; seg.seg_read(0b1,adr_sel[3:1]); } /* UISA0-7 */
+      SEGMENT == {0o76,0b0}: { done(); in_sel = PDR_READ; seg.seg_read(0b1,adr_sel[3:1]); } /* UISD0-7 */
+
+      /* Timer */
+      MAPPING == 0o7546: { done(); in_sel = {(0o000),timer_irq_enable,(0o00)}; }
+      MAPPING == 0o7544: { done(); in_sel = 0x0000; }
+
+      /* RS-232C interface */
+      MAPPING == 0o7570: { done(); in_sel = {(0o00000),rs232_sw}; }
+      MAPPING == 0o7566: { done(); in_sel = 0x0000; }
+      MAPPING == 0o7564: { done(); in_sel = {(0x00),rs232.sv,send_irq_enable,(0o00)}; }
+      MAPPING == 0o7562: { done(); in_sel = {(0x00),rs232.get().out}; }
+      MAPPING == 0o7560: { done(); in_sel = {(0x00),rs232.rv,recv_irq_enable,(0o00)}; }
+
+      /* RK Disk Drive */
+      MAPPING == 0o7404: { done(); in_sel = Rk.rkcs_rd().rk_out; }
+      MAPPING == 0o7406: { done(); in_sel = Rk.rkwc_rd().rk_out; }
+      MAPPING == 0o7410: { done(); in_sel = Rk.rkba_rd().rk_out; }
+      MAPPING == 0o7412: { done(); in_sel = Rk.rkda_rd().rk_out; }
+
+    }
+    ~done: in_sel = 0xffff;
+  }
+
+#define PDR_WRITE {out_sel[14:08],out_sel[6],out_sel[3:1]}
+#define PAR_WRITE (out_sel[11:0])
+
+  func mwt any {
+    /* Physical memory write */
+    NO_MAPPED: { wt(adr_sel, out_sel, cpu.byte); }
+
+    EABMAP: { ewt({0o00,adr_sel[11:00]}, out_sel, cpu.byte); }
+    MAPPED: any {
+      /* Processor Status Word */
+      MAPPING == 0o7776: cpu.pswt( out_sel );
+
+      /* Segment Registers */
+      MAPPING == 0o7572: { 
+        non_resident := out_sel[15];
+        length_error := out_sel[14];
+        readonly_error := out_sel[13];
+        ssr0_mode := out_sel[6:5];
+        ssr0_page := out_sel[3:1];
+        ssr0_sw := out_sel[0];
+      } /* SSR0 */
+      SEGMENT == {0o23,0b1}: { seg.writePAR(0b0,adr_sel[3:1],PAR_WRITE); } /* KISA0-7 */
+      SEGMENT == {0o23,0b0}: { seg.writePDR(0b0,adr_sel[3:1],PDR_WRITE); } /* KISD0-7 */
+      SEGMENT == {0o76,0b1}: { seg.writePAR(0b1,adr_sel[3:1],PAR_WRITE); } /* UISA0-7 */
+      SEGMENT == {0o76,0b0}: { seg.writePDR(0b1,adr_sel[3:1],PDR_WRITE); } /* UISD0-7 */
+
+      /* Timer */
+      MAPPING == 0o7546: timer_irq_enable := out_sel[6];
+
+      /* RS-232C interface */
+      MAPPING == 0o7570: rs232_sw := out_sel[0];
+      MAPPING == 0o7566: rs232.put( out_sel[7:0] );
+      MAPPING == 0o7564: send_irq_enable := out_sel[6];
+      MAPPING == 0o7562: ;
+      MAPPING == 0o7560: { recv_irq_enable := out_sel[6]; if(out_sel[0]) rs232.get(); }
+
+      /* RK Disk Drive */
+      MAPPING == 0o7404: Rk.rkcs_wt(out_sel);
+      MAPPING == 0o7406: Rk.rkwc_wt(out_sel);
+      MAPPING == 0o7410: Rk.rkba_wt(out_sel);
+      MAPPING == 0o7412: Rk.rkda_wt(out_sel);
+
+    }
+  }
+/*
+ * Memory Management Unit
+ */
+#define CPU_MODE (&cpu.pswout[15:14])
+#define SSR2_LOCK (non_resident | readonly_error | length_error)
+
+  {
+    state_name s0,s1,s2,s3;
+    first_state s0;
+    state s0 {
+      /* Virtual Address 160000 to 177777 is mapped from 760000 to 777777 */
+      if(~ssr0_sw) if(~Rk.active) {
+        if(cpu.rd) mmu_buf := mrd( {(&APF),(&APF),cpu.adrs} ).in_sel;
+        if(cpu.wt) mwt( {(&APF),(&APF),cpu.adrs}, cpu.dato );
+        if(cpu.rd | cpu.wt) goto s3;
+      }
+      /* Compute Physical Address */
+      if(ssr0_sw & (cpu.rd | cpu.wt)) {
+        seg.seg_read(CPU_MODE, APF);
+        PA := {mmu_adder.do({0b00000,BN}, seg.PARout, 0b0).out,DIB};
+        goto s1;
+      }
+      if(cpu.rd & cpu.inst & ~SSR2_LOCK) SSR2 := cpu.adrs;
+    }
+    state s1 {
+      /* Read PAR from segment reg */
+      seg.seg_read(CPU_MODE, APF);
+      /* set W reg of PDR */
+      if(cpu.wt) seg.writePDR(CPU_MODE, APF, {PLF,0b1,ED,ACF});
+      /* Access Control Error Detection */
+      if( (ACF == 0b00) | (ACF == 0b10) | (^cpu.pswout[15:14])) { non_resident := 0b1; access_err(); }
+      if( (ACF == 0b01) & cpu.wt) { readonly_error := 0b1; access_err(); }
+      /* Page Length Error Detection */
+      mmu_adder.do(12#PLF, 12#nBN, 0b1);
+      if(~ED &~mmu_adder.c &~mmu_adder.z ) { length_error := 0b1; length_err(); }
+      if( ED & mmu_adder.c &~mmu_adder.z ) { length_error := 0b1; length_err(); }
+      /* If any error was detected ... */
+      if(BUS_ERROR) { 
+        bus_err();
+        cpu.error();
+        goto s0;
+      }
+      if(access_err | length_err) {
+        if(~SSR2_LOCK) {
+          ssr0_mode := cpu.pswout[15:14];
+          ssr0_page := APF;
+        }
+        cpu.fault();
+        goto s0;
+      }
+      /* If All Green */
+      if(~access_err & ~length_err & ~bus_err) { goto s2; }
+    }
+    state s2 if(~Rk.active) {
+      if(cpu.rd) mmu_buf := mrd(PA).in_sel;
+      if(cpu.wt) mwt(PA, cpu.dato);
+      goto s3;
+    }
+    state s3 {
+      cpu.rdy();
+      if(cpu.rd) cpu.dati = mmu_buf;
+      goto s0;
+    }
+  } /* end of mmu */
+
+} /* end of core */
+
+module segment_reg {
+  /* Kernel Mode Page Address Reg and Page Discription Reg */
+  reg  k_par0[12]=0, k_pdr0[11]=0;
+  reg  k_par1[12]=0, k_pdr1[11]=0;
+  reg  k_par2[12]=0, k_pdr2[11]=0;
+  reg  k_par3[12]=0, k_pdr3[11]=0;
+  reg  k_par4[12]=0, k_pdr4[11]=0;
+  reg  k_par5[12]=0, k_pdr5[11]=0;
+  reg  k_par6[12]=0, k_pdr6[11]=0;
+  reg  k_par7[12]=0, k_pdr7[11]=0;
+  /* User Mode Page Address Reg and Page Discription Reg */
+  reg  u_par0[12]=0, u_pdr0[11]=0;
+  reg  u_par1[12]=0, u_pdr1[11]=0;
+  reg  u_par2[12]=0, u_pdr2[11]=0;
+  reg  u_par3[12]=0, u_pdr3[11]=0;
+  reg  u_par4[12]=0, u_pdr4[11]=0;
+  reg  u_par5[12]=0, u_pdr5[11]=0;
+  reg  u_par6[12]=0, u_pdr6[11]=0;
+  reg  u_par7[12]=0, u_pdr7[11]=0;
+
+  func seg_read any {
+    (~mode)&(page == 0o0): { PARout = k_par0; PDRout = k_pdr0; }
+    (~mode)&(page == 0o1): { PARout = k_par1; PDRout = k_pdr1; }
+    (~mode)&(page == 0o2): { PARout = k_par2; PDRout = k_pdr2; }
+    (~mode)&(page == 0o3): { PARout = k_par3; PDRout = k_pdr3; }
+    (~mode)&(page == 0o4): { PARout = k_par4; PDRout = k_pdr4; }
+    (~mode)&(page == 0o5): { PARout = k_par5; PDRout = k_pdr5; }
+    (~mode)&(page == 0o6): { PARout = k_par6; PDRout = k_pdr6; }
+    (~mode)&(page == 0o7): { PARout = k_par7; PDRout = k_pdr7; }
+    ( mode)&(page == 0o0): { PARout = u_par0; PDRout = u_pdr0; }
+    ( mode)&(page == 0o1): { PARout = u_par1; PDRout = u_pdr1; }
+    ( mode)&(page == 0o2): { PARout = u_par2; PDRout = u_pdr2; }
+    ( mode)&(page == 0o3): { PARout = u_par3; PDRout = u_pdr3; }
+    ( mode)&(page == 0o4): { PARout = u_par4; PDRout = u_pdr4; }
+    ( mode)&(page == 0o5): { PARout = u_par5; PDRout = u_pdr5; }
+    ( mode)&(page == 0o6): { PARout = u_par6; PDRout = u_pdr6; }
+    ( mode)&(page == 0o7): { PARout = u_par7; PDRout = u_pdr7; }
+  }
+  func writePAR any {
+    (~mode)&(page == 0o0): k_par0 := PARin;
+    (~mode)&(page == 0o1): k_par1 := PARin;
+    (~mode)&(page == 0o2): k_par2 := PARin;
+    (~mode)&(page == 0o3): k_par3 := PARin;
+    (~mode)&(page == 0o4): k_par4 := PARin;
+    (~mode)&(page == 0o5): k_par5 := PARin;
+    (~mode)&(page == 0o6): k_par6 := PARin;
+    (~mode)&(page == 0o7): k_par7 := PARin;
+    ( mode)&(page == 0o0): u_par0 := PARin;
+    ( mode)&(page == 0o1): u_par1 := PARin;
+    ( mode)&(page == 0o2): u_par2 := PARin;
+    ( mode)&(page == 0o3): u_par3 := PARin;
+    ( mode)&(page == 0o4): u_par4 := PARin;
+    ( mode)&(page == 0o5): u_par5 := PARin;
+    ( mode)&(page == 0o6): u_par6 := PARin;
+    ( mode)&(page == 0o7): u_par7 := PARin;
+  }
+  func writePDR any {
+    (~mode)&(page == 0o0): k_pdr0 := PDRin;
+    (~mode)&(page == 0o1): k_pdr1 := PDRin;
+    (~mode)&(page == 0o2): k_pdr2 := PDRin;
+    (~mode)&(page == 0o3): k_pdr3 := PDRin;
+    (~mode)&(page == 0o4): k_pdr4 := PDRin;
+    (~mode)&(page == 0o5): k_pdr5 := PDRin;
+    (~mode)&(page == 0o6): k_pdr6 := PDRin;
+    (~mode)&(page == 0o7): k_pdr7 := PDRin;
+    ( mode)&(page == 0o0): u_pdr0 := PDRin;
+    ( mode)&(page == 0o1): u_pdr1 := PDRin;
+    ( mode)&(page == 0o2): u_pdr2 := PDRin;
+    ( mode)&(page == 0o3): u_pdr3 := PDRin;
+    ( mode)&(page == 0o4): u_pdr4 := PDRin;
+    ( mode)&(page == 0o5): u_pdr5 := PDRin;
+    ( mode)&(page == 0o6): u_pdr6 := PDRin;
+    ( mode)&(page == 0o7): u_pdr7 := PDRin;
+  }
+}/* end of segment */

@@ -1,0 +1,4 @@
+This directory is simulation environment for POP-11.
+You can type 'make' to boot UNIX with Icarus Verilog.
+
+Yoshihiro Iida

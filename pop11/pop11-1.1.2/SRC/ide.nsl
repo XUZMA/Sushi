@@ -1,0 +1,155 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  ide.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  IDE disk controller of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#define ATA_ALTER   0b01110
+#define ATA_DEVCTRL 0b01110 /* bit [2] is a nIEN */
+#define ATA_DATA    0b10000
+#define ATA_ERROR   0b10001
+#define ATA_FEATURE 0b10001
+#define ATA_SECCNT  0b10010
+#define ATA_SECNUM  0b10011 /* LBA[7:0] */
+#define ATA_CYLLOW  0b10100 /* LBA[15:8] */
+#define ATA_CYLHIGH 0b10101 /* LBA[23:16] */
+#define ATA_DEVHEAD 0b10110 /* 0b0 || LBA || 0b0 || DEV || LBA[27:24] */
+#define ATA_STATUS  0b10111
+#define ATA_COMMAND 0b10111
+
+#define ATA_RDY   ata.ata_done
+#define ATA_BSY   ata.out[7] 
+#define ATA_DRQ   ata.out[3]
+#define ATA_ERR   ata.out[0]
+#define ATA_IEN   0x0002
+#define ATA_READ  0x0020
+#define ATA_WRITE 0x0030
+
+#define GND 0b0
+
+declare ide {
+  output   RST;
+  output   CS[2];
+  output   DA[3];
+  input    DDI[16];
+  output   DDO[16];
+  output   DIOR;
+  output   DIOW;
+
+  func_out ata_done;
+  input    ata_adrs[5];
+  input    in[16];
+  output   out[16];
+
+  func_in ata_rd(ata_adrs);
+  func_in ata_wt(ata_adrs, in);
+}
+
+module ide {
+
+  reg   nrst=0;
+  reg   cs[2]=3;
+  reg   da[3]=7;
+  reg   dd[16]=0;
+  reg   dior=1;
+  reg   diow=1;
+  reg   send=0;
+
+
+  {
+    RST = nrst;
+    CS = cs;
+    DA = da;
+    DIOR = dior;
+    DIOW = diow;
+    DDO = dd;
+    nrst := 0b1;
+  }
+
+
+  {
+    state_name idle, s0, s1, s2, s3, s4;
+    first_state idle;
+
+    state idle any {
+      ata_rd|ata_wt: {
+        cs := ata_adrs[4:3];
+        da := ata_adrs[2:0];
+        goto s0;
+      }
+    }
+
+    state s0 any {
+      ata_rd: {
+        dior := 0b0;
+        goto s1;
+      }
+      ata_wt: {
+        diow := 0b0;
+        send := 0b1;
+        dd := in;
+        goto s1;
+      }
+    }
+
+    state s1 goto s2;
+
+    state s2 goto s3;
+
+    state s3 {
+      dior := 0b1;
+      diow := 0b1;
+      if(ata_rd) out = DDI;
+      ata_done();
+      goto s4;
+    }
+
+    state s4 {
+      send := 0b0;
+      cs := 0b11;
+      da := 0b111;
+      goto idle;
+    }
+  }
+}
+
+  

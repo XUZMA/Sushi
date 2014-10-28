@@ -1,0 +1,97 @@
+/*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*/
+
+#include "dec6.nsl"
+#include "dec4.nsl"
+#include "inc3.nsl"
+#include "RS232C_R1.1.nsl"
+#include "RS232C_S1.2.nsl"
+#define COUNT 0b111111
+
+declare RS232C_IF{
+	input		txd;
+	input		rts;
+	input		in[8];
+	output		cts;
+	output		rxd;
+	output		out[8];
+	output		sv;
+	output		rv;
+	func_in		do;
+	func_in		get;
+
+	func_in put(in);
+	func_in chmod1(in);
+}	
+	
+module RS232C_IF{
+
+	reg		clk[6];
+
+	dec6		count;
+	RS232C_R	reciever;
+	RS232C_S	sender;
+	
+	proc_name cycle();
+
+	{
+		rv = reciever.stat;
+		sv = sender.stat;
+		cts = reciever.cts;
+		rxd = sender.rxd;
+		reciever.txd = txd;
+		sender.rts = rts;
+	}	
+
+	func get out = reciever.get().data;
+
+	func put sender.put(in);
+	func chmod1 sender.chmod1(in);
+
+	func do {
+		cycle();
+	}	
+
+	proc cycle{
+		state_name	idle, divide;
+		first_state	divide;
+		state divide {
+			reciever.do();
+			sender.do();
+
+      clk := COUNT;
+			goto idle;
+		}
+
+		state idle any{
+			|clk:clk := count.do(clk).out;
+			~(|clk):goto divide;
+		}
+	}
+}	
+			

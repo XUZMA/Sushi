@@ -1,0 +1,666 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  pop11.sfl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  Control of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001@keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu@ip-arch.jp) Nov. 24, 2011:
+*	Convert to NSL
+*
+*/
+
+#include "define.nsl"
+#include "pop11.h"
+#include "data11.nsl"
+#include "idc.nsl"
+#include "cnt4.nsl"
+
+module pop11 {
+
+  data11    dp;
+  idc       id;
+  cnt4      cnt;
+  reg    st0=0;
+  reg       st1,st2;
+  reg       rsub;
+
+  wire       byte_sel;
+  reg	tsk[4]=0;
+
+  func_self start;
+  func_self ifrun, wback, svcall;
+  func_self decop;
+  func_self s0,s1,s2,s3,s4,s5,s6,s7,s8;
+  func_self write(byte_sel);
+  func_self read(byte_sel);
+
+
+  reg	ifruns[2]=0;
+#define IFRUN 0
+#define SRCOP 1
+#define DSTOP 2
+  proc_name ifetch(ifruns);
+  proc_name ex(tsk);
+  proc_name wb();
+#define INT_REQ 0
+#define INT_SVC 1
+#define TRACE 2
+  reg trapkind[3]=0;
+  proc_name trap(trapkind);
+
+/*
+ * Boot sequence
+ */
+  {
+    st0 := 0b1;
+    st1 := st0;
+    st2 := st1;
+    if((st2==0b0) & (st1==0b1)) start();
+
+    pswout = dp.psw;
+  }
+
+  func read { rd(); adrs = dp.dba; if(RDY) dp.dbi = dati; byte = byte_sel; }
+  func write { wt(); dato = dp.dbo; adrs = dp.dba; byte = byte_sel; }
+  func pswt { dp.dbi = psi; dp.dbiPS(); }
+
+  func start { ifetch(IFRUN); dp.setPCrom(); }
+/*
+ * Decodes instruction, and func the instruction.
+ */
+  func decop any {
+    id.dclr: { dp.dstALU1(); dp.clr(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dcom: { dp.dstALU1(); dp.com(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dinc: { dp.dstALU1(); dp.inc(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.ddec: { dp.dstALU1(); dp.dec(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dneg: { dp.dstALU1(); dp.neg(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dadc: { dp.dstALU1(); dp.adc(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dsbc: { dp.dstALU1(); dp.sbc(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dtst: { dp.dstALU1(); dp.tst(); ifrun(); dp.ALUcc(); }
+    id.dror: { dp.dstALU1(); dp.ror(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.drol: { dp.dstALU1(); dp.rol(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dasr: { dp.dstALU1(); dp.asr(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dasl: { dp.dstALU1(); dp.asl(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dsxt: { dp.dstALU1(); dp.sxt(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dmov: { dp.srcALU1(); dp.mov(); dp.ALUdst(); wback(); dp.ALUcc(); }
+    id.dcmp: { dp.srcALU1(); dp.dstALU2(); dp.cmp(); ifrun(); dp.ALUcc(); }
+    id.dbit: { dp.srcALU1(); dp.dstALU2(); dp.bit(); ifrun(); dp.ALUcc(); }
+    id.dbic: { dp.srcALU1(); dp.dstALU2(); dp.bic(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dbis: { dp.srcALU1(); dp.dstALU2(); dp.bis(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dadd &~rsub: { dp.srcALU1(); dp.dstALU2(); dp.add(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dadd & rsub: { dp.srcALU2(); dp.dstALU1(); dp.sub(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dexor: { dp.srcALU1(); dp.dstALU2(); dp.exor(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+    id.dswab: { dp.dstALU1(); dp.swab(); dp.ALUdstb(); wback(); dp.ALUcc(); }
+
+    id.dnop: { ifrun(); }
+    id.djmp: { dp.adrPC(); ifrun(); }
+
+    id.dbpt: { dp.bpt(); svcall(); }
+    id.diot: { dp.iot(); svcall(); }
+    id.demt: { dp.emt(); svcall(); }
+    id.dtrap: { dp.svc(); svcall(); }
+
+    id.dspl: { ifrun(); dp.spl(); }
+
+    id.dfloat: { ifrun(); } /* Not implemented yet */
+    id.dreset: { ifrun(); } /* Not implemented yet */
+    id.dhalt: { }
+
+    id.diwait: {
+      if( irq_in) ifrun();
+      if(~irq_in) s0();
+    }
+
+/*
+ * Subtract One and Branch
+ */
+    id.dsob: any {
+      ex&&(tsk==0): {
+        dp.regSEL2(); dp.selALU1(); dp.dec(); dp.ALUreg(); dp.setReg2();
+        dp.ccget();
+        if(~dp.alucc[2]) s1();
+        if( dp.alucc[2]) ifrun();
+      }
+      ex&&(tsk==1): {
+        dp.pcALU1(); dp.ofs6ALU2(); dp.sub(); dp.ALUpc();
+        ifrun();
+      }
+    }
+/*
+ * Mark
+ */
+    id.dmark: any {
+      ex&&(tsk==0): {
+        dp.spALU1(); dp.ofs6ALU2(); dp.add(); dp.ALUsp();
+        dp.FPpc(); s1();
+      }
+      ex&&(tsk==1): {
+        read(WORD); dp.dbaSP();
+        if(~RDY) s1();
+        if(RDY) {
+          dp.dbiFP();
+          dp.spALU1(); dp.inc2(); dp.ALUsp();
+          ifrun();
+        }
+      }
+    }
+/*
+ * Return Interrupt
+ */
+    (id.drti | id.drtt): any {
+      ex&&(tsk==0): {
+        read(WORD); dp.dbaSP();
+        if(~RDY) s0();
+        if(RDY) {
+          dp.dbiPC();
+          dp.spALU1(); dp.inc2(); dp.ALUsp();
+          s1();
+        }
+      }
+      ex&&(tsk==1): {
+        read(WORD); dp.dbaSP();
+        if(~RDY) s1();
+        if(RDY) {
+          dp.dbiPS();
+          dp.spALU1(); dp.inc2(); dp.ALUsp();
+          ifrun();
+        }
+      }
+    }
+/*
+ * Jump Subroutine
+ */
+    id.djsr: any {
+      ex&&(tsk==0): {
+        dp.spALU1(); dp.dec2(); dp.ALUsp();
+        s1();
+      }
+      ex&&(tsk==1): {
+        write(WORD); dp.regSEL2();dp.dboSEL(); dp.dbaSP();
+        if(~RDY) s1();
+        if(RDY) { dp.PCreg(); dp.setReg2(); s2(); }
+      }
+      ex&&(tsk==2): {
+        dp.adrPC(); ifrun();
+      }
+    }
+/*
+ * RTS: Return Subroutine
+ */
+    id.drts: any {
+      ex&&(tsk==0): {
+        dp.regSEL(); dp.SELpc(); s1();
+      }
+      ex&&(tsk==1): {
+        read(WORD); dp.dbaSP();
+        if(~RDY) s1();
+        if(RDY) {
+          dp.dbiReg(); dp.setReg();
+          dp.spALU1(); dp.inc2(); dp.ALUsp();
+          ifrun();
+        }
+      }
+    }
+/*
+ * MFPI: Move From Previous Instruction space
+ */
+    MMU & id.dmfpi: any {
+      ex&&(tsk==0): {
+        dp.change_mode(); s1();
+      }
+      ex&&(tsk==1): {
+        if(|dp.opc[5:3]) {
+          read(WORD); dp.dbaAdr();
+          if(error) dp.change_mode();
+          if(fault) dp.change_mode();
+          if(RDY) {
+            dp.change_mode();
+            dp.dbiDst(); s2();
+          }
+        }
+        if(~|dp.opc[5:3]) {
+          dp.change_mode();
+          dp.regSEL(); dp.SELdst(); s2();
+        }
+      }
+      ex&&(tsk==2): {
+        dp.spALU1(); dp.dec2(); dp.ALUsp(); s3();
+      }
+      ex&&(tsk==3): {
+        write(WORD); dp.dbaSP(); dp.dboDst();
+        if(RDY) {
+          dp.srcALU1(); dp.mmu(); dp.ALUcc(); ifrun();
+        }
+      }
+    }
+/*
+ * MTPI: Move To Previous Instruction space
+ */
+    MMU & id.dmtpi: any {
+      ex&&(tsk==0): {
+        read(WORD); dp.dbaSP();
+        if(RDY) {
+          dp.spALU1(); dp.inc2(); dp.ALUsp();
+          dp.change_mode();
+          dp.dbiSrc(); s1();
+        }
+      }
+      ex&&(tsk==1): {
+        if(|dp.opc[5:3]) {
+          write(WORD); dp.dbaAdr(); dp.dboSrc();
+          if(error) dp.change_mode();
+          if(fault) dp.change_mode();
+          if(RDY) {
+            dp.change_mode();
+            ifrun();
+          }
+        }
+        if(~|dp.opc[5:3]) {
+          dp.change_mode();
+          dp.SRCreg(); dp.setReg(); ifrun();
+        }
+        dp.srcALU1(); dp.mmu(); dp.ALUcc();
+      }
+    }
+/*
+ * MUL
+ */
+    EIS & id.dmul: any {
+      ex&&(tsk==0): {
+        dp.clrADR(); s1();
+      }
+      ex&&(tsk==1): {
+        dp.mul();
+        if(~(cnt.out==0xf)) { s1(); cnt.inc(); }
+        if( (cnt.out==0xf)) { s2(); cnt.rst(); }
+      }
+      ex&&(tsk==2): {
+        if(dp.opc[6]) {
+          dp.SRCreg(); dp.setReg2(); dp.tstSRC(); ifrun();
+        }
+        if(~dp.opc[6]) {
+          dp.ADRreg(); dp.setReg2(); dp.oddReg(); dp.tstSRCADR(); s3();
+        }
+      }
+      ex&&(tsk==3): {
+        dp.SRCreg(); dp.setReg2(); ifrun();
+      }
+    }
+/*
+ * DIV
+ */
+    EIS & id.ddiv: any {
+      ex&&(tsk==0): { dp.div_ini0(); s1(); dp.oddReg(); }
+      ex&&(tsk==1): { dp.regSEL2(); dp.SELadr(); s2(); }
+      ex&&(tsk==2): { dp.div_ini1(); s3(); }
+      ex&&(tsk==3): { dp.div_ini2(); s4(); }
+      ex&&(tsk==4): {
+        if(~dp.psw[1]) dp.div();
+        if(~dp.psw[1] &~(cnt.out==0xf)) { s4(); cnt.inc(); }
+        if(~dp.psw[1] & (cnt.out==0xf)) { s5(); cnt.rst(); }
+        if( dp.psw[1]) ifrun();
+      }
+      ex&&(tsk==5): {
+        dp.div(); dp.div_end();
+        if(~dp.psw[1]) s6();
+        if( dp.psw[1]) ifrun();
+      }
+      ex&&(tsk==6): {
+        if(~dp.psw[1]) { dp.div_fin0(); s7(); }
+        if( dp.psw[1]) ifrun();
+      }
+      ex&&(tsk==7): { dp.div_fin1(); s8(); dp.SRCreg(); dp.setReg2(); dp.oddReg(); dp.tstSRC(); }
+      ex&&(tsk==8): { dp.ADRreg(); dp.setReg2(); dp.adrALU1(); dp.tst(); dp.ALUcc(); ifrun(); }
+    }
+/*
+ * ASH
+ */
+    EIS & id.dash: any {
+      ex&&(tsk==0): {
+        dp.ash();
+        if(dp.ashdone) s1();
+        if(~dp.ashdone) s0();
+      }
+      ex&&(tsk==1): {
+        dp.tstSRC(); dp.SRCreg(); dp.setReg2(); ifrun();
+      }
+    }
+/*
+ * ASHC
+ */
+    EIS & id.dashc: any {
+      ex&&(tsk==0): {
+        dp.oddReg(); s1();
+      }
+      ex&&(tsk==1): {
+        dp.regSEL2(); dp.SELadr(); s2();
+      }
+      ex&&(tsk==2): {
+        dp.ashc();
+        if(dp.ashdone) s3();
+        if(~dp.ashdone) s2();
+      }
+      ex&&(tsk==3): {
+        dp.ADRreg(); dp.setReg2(); dp.oddReg(); s4();
+      }
+      ex&&(tsk==4): {
+        dp.SRCreg(); dp.setReg2(); dp.tstSRCADR(); ifrun();
+      }
+    }
+
+  }/* end of decop */
+
+  proc ifetch {
+    state_name if0,id0,of0,of1,of2,of3,of4,cc0,br0;
+    first_state if0;
+/*
+ * Instruction fetch
+ */
+    state if0 {
+      inst();
+      read(WORD);
+      dp.dbaPC();
+      if(error) { dp.buserr(); trap(INT_SVC); }
+      if(fault) { dp.segerr(); trap(INT_SVC); }
+      if(RDY) {
+        dp.pcALU1(); dp.inc2(); dp.ALUpc();
+        dp.setopc();
+        goto id0;
+      }
+    }
+/*
+ * Decodes instruction type
+ */
+    state id0 {
+      id.do(dp.opc);
+      if(id.sop) { goto of1; ifetch(SRCOP); dp.change_opr(); }
+      if(id.dop) { goto of1; ifetch(DSTOP); }
+      if(id.rsd) { goto of0; ifetch(DSTOP); dp.change_opr(); }
+      if(id.nof) { goto if0; ex(0); }
+      if(id.cco) { goto cc0; }
+      if(id.bra) { goto br0; }
+      if(id.dadd) { rsub := 0b0; }
+      if(id.dsub) { rsub := 0b1; dp.reset_byte(); }
+      if(id.unused) { goto if0; dp.err(); trap(INT_SVC); }
+    }
+/*
+ * Condition Code operation
+ */
+    state cc0 {
+      dp.ccset();
+      goto if0;
+      if(~(trapkind==TRACE) & irq_in) trap(INT_REQ);
+      if((trapkind==TRACE)) { dp.bpt(); trap(INT_SVC); }
+    }
+/*
+ * Branch
+ */
+    state br0 {
+      dp.cctaken();
+      if(dp.taken) { dp.pcALU1(); dp.ofs8ALU2(); dp.add(); dp.ALUpc(); }
+      goto if0;
+      if(~(trapkind==TRACE) & irq_in) trap(INT_REQ);
+      if((trapkind==TRACE)) { dp.bpt(); trap(INT_SVC); }
+    }
+/*
+ * Register read without Addressing mode.
+ */
+    state of0 {
+      dp.regSEL(); dp.SELsrc(); dp.change_opr();
+      goto of1;
+    }
+/*
+ * Mode check
+ */
+    state of1 any {
+      (MODE == 0b00): {
+        if((ifruns==DSTOP)) dp.SELdst();
+        if((ifruns==SRCOP)) dp.SELsrc();
+        dp.regSEL();
+        any {
+          (INDR): goto of4;
+          ((ifruns==DSTOP) &~INDR): { goto if0; ex(0); }
+          ((ifruns==SRCOP) &~INDR): { goto of1; ifetch(DSTOP); dp.change_opr(); }
+        }
+      }
+      (MODE == 0b01): {
+        dp.regSEL(); dp.selALU1(); dp.ALUreg(); dp.setReg();
+        if( BYTE &~(INDR|SPPC) ) dp.inc();
+        if(~BYTE | (INDR|SPPC) ) dp.inc2();
+        if((ifruns==DSTOP)) dp.SELdst();
+        if((ifruns==SRCOP)) dp.SELsrc();
+        goto of3;
+      }
+      (MODE == 0b10): {
+        dp.regSEL(); dp.selALU1(); dp.ALUreg(); dp.setReg();
+        if( BYTE &~(INDR|SPPC) ) dp.dec();
+        if(~BYTE | (INDR|SPPC) ) dp.dec2();
+        if((ifruns==DSTOP)) dp.ALUdst();
+        if((ifruns==SRCOP)) dp.ALUsrc();
+        goto of3;
+      }
+      (MODE == 0b11): {
+        read(WORD);
+        dp.dbaPC();
+        if(error) { goto if0; dp.buserr(); trap(INT_SVC); }
+        if(fault) { goto if0; dp.segerr(); trap(INT_SVC); }
+        if(RDY) {
+          dp.pcALU1(); dp.inc2(); dp.ALUpc();
+          if((ifruns==DSTOP)) dp.dbiDst();
+          if((ifruns==SRCOP)) dp.dbiSrc();
+          goto of2;
+        }
+      }
+    }
+/*
+ * Computes effective adress in index mode.
+ */
+    state of2 {
+      dp.regSEL(); dp.selALU1(); dp.add();
+      if((ifruns==DSTOP)) { dp.dstALU2(); dp.ALUdst(); }
+      if((ifruns==SRCOP)) { dp.srcALU2(); dp.ALUsrc(); }
+      goto of3;
+    }
+/*
+ * First step memory read. Used by Auto-inc,dec,index mode.
+ */
+    state of3 {
+      if( INDR) read(WORD);
+      if(~INDR) read(BYTE);
+      if((ifruns==DSTOP)) dp.dbaDst();
+      if((ifruns==SRCOP)) dp.dbaSrc();
+      if(error) { goto if0; dp.buserr(); trap(INT_SVC); }
+      if(fault) { goto if0; dp.segerr(); trap(INT_SVC); }
+      if(RDY) {
+        if((ifruns==DSTOP)) { dp.dbiDst(); dp.DSTadr(); }
+        if((ifruns==SRCOP)) { dp.dbiSrc(); dp.SRCadr(); }
+        any {
+          (INDR): goto of4;
+          ((ifruns==DSTOP) &~INDR): { goto if0; ex(0); }
+          ((ifruns==SRCOP) &~INDR): { goto of1; ifetch(DSTOP); dp.change_opr(); }
+        }
+      }
+    }
+/*
+ * Deferred instruction
+ */
+    state of4 any {
+      (ifruns==DSTOP): {
+        read(BYTE);
+        dp.dbaDst();
+        if(error) { goto if0; dp.buserr(); trap(INT_SVC); }
+        if(fault) { goto if0; dp.segerr(); trap(INT_SVC); }
+        if(RDY) {
+          dp.DSTadr();
+          dp.dbiDst();
+          goto if0;
+          ex(0);
+        }
+      }
+      (ifruns==SRCOP): {
+        read(BYTE);
+        dp.dbaSrc();
+        if(error) { goto if0; dp.buserr(); trap(INT_SVC); }
+        if(fault) { goto if0; dp.segerr(); trap(INT_SVC); }
+        if(RDY) {
+          dp.SRCadr();
+          dp.dbiSrc();
+          goto of1;
+          ifetch(DSTOP);
+          dp.change_opr();
+        }
+      }
+    }
+  }/* end of if */
+
+  proc ex {
+    {
+      decop();
+      id.do(dp.opc);
+      any {
+        ~(error | fault): any {
+          s0: ex(0);
+          s1: ex(1);
+          s2: ex(2);
+          s3: ex(3);
+          s4: ex(4);
+          s5: ex(5);
+          s6: ex(6);
+          s7: ex(7);
+          s8: ex(8);
+        }
+        error: { dp.buserr(); trap(INT_SVC); }
+        fault: { dp.segerr(); trap(INT_SVC); }
+        wback: wb();
+        svcall: trap(INT_SVC);
+        (ifrun &~(trapkind==TRACE) &~irq_in): ifetch(IFRUN);
+        (ifrun &~(trapkind==TRACE) & irq_in): trap(INT_REQ);
+        (ifrun & (trapkind==TRACE) &~id.drtt): { dp.bpt(); trap(INT_SVC); }
+        (ifrun & (trapkind==TRACE) & id.drtt): ifetch(IFRUN);
+        /* else: finish; */
+      }
+    }
+  }/* end of ex */
+
+  proc wb {
+    state_name wb_s0;
+    first_state wb_s0;
+    state wb_s0 {
+      if(|dp.opc[5:3]) {
+        write(BYTE);
+        dp.dboDst(); dp.dbaAdr();
+        if(RDY &~(trapkind==TRACE) &~irq_in) ifetch(IFRUN);
+        if(RDY &~(trapkind==TRACE) & irq_in) trap(INT_REQ);
+        if(RDY & (trapkind==TRACE)) { dp.bpt(); trap(INT_SVC); }
+        if(error) { dp.buserr(); trap(INT_SVC); }
+        if(fault) { dp.segerr(); trap(INT_SVC); }
+      }
+      if(~|dp.opc[5:3]) {
+        dp.DSTreg(); dp.setReg();
+        if(~(trapkind==TRACE) &~irq_in) ifetch(IFRUN);
+        if(~(trapkind==TRACE) & irq_in) trap(INT_REQ);
+        if( (trapkind==TRACE)) { dp.bpt(); trap(INT_SVC); }
+      }
+    }
+  }/* end of wb */
+
+  proc trap {
+    state_name trap0,trap1,trap2,trap3,trap4;
+    first_state trap0;
+/*
+ * STATE 0
+ * read interrupt address vector, and move it to SRC register
+ * zero clear op-code
+ * change current mode to kernel mode after saving status
+ * keep PC to ADR register and PS to DST register
+ */
+    state trap0 {
+      if(trapkind==INT_REQ) { int_ack(); dp.dbi = dati; dp.dbiSrc(); }
+      if(trapkind==INT_SVC) { }
+      dp.reset_byte();
+      dp.kernel_mode();
+      dp.save_stat();
+      goto trap1;
+    }
+/*
+ * STATE 1
+ * memory read with address vector to PC
+ * increment address vector
+ */
+    state trap1 {
+      read(WORD); dp.dbaSrc(); /* vector */
+      if(RDY) {
+        dp.dbiPC();
+        dp.srcALU1(); dp.inc2(); dp.ALUsrc();
+        goto trap2;
+      }
+    }
+/* STATE 2
+ * memory read with address vector to PS
+ * decrement SP to ready to push PS
+ */
+    state trap2 {
+      read(WORD); dp.dbaSrc(); /* vector +2 */
+      if(RDY) {
+        dp.vectorPS();
+        dp.spALU1(); dp.dec2(); dp.ALUsp();
+        goto trap3;
+      }
+    }
+/*
+ * STATE 3
+ * push PS
+ * decrement SP to ready to push PC
+ */
+    state trap3 {
+      dp.dboDst(); dp.dbaSP(); write(BYTE);
+      if(RDY) {
+        dp.spALU1(); dp.dec2(); dp.ALUsp();
+        goto trap4;
+      }
+    }
+/*
+ * STATE 4
+ * push PC
+ */
+    state trap4 {
+      dp.dboAdr(); dp.dbaSP(); write(BYTE);
+      if(RDY) { goto trap0; ifetch(IFRUN); }
+    }
+  }/* end of trap */
+
+}/* end of pop11 */

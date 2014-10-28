@@ -1,0 +1,397 @@
+/******************** MODULE INFO  ****************************/
+/*
+*  File name   :  data11.nsl
+*
+*  AUTHOR      :  Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp)
+*  VERSION     :  1.0
+*  DATE        :  Oct 16, 2003
+*
+*   Compiler    :  sfl2vl
+*   Project     :  POP-11: PDP-11 compatible On Programmable chip
+*   Functions   :  Datapath of POP-11
+*
+*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*
+*    ------------  CHANGE RECORD  ----------------
+*    Yoshihiro Iida (3aepm001^keyaki.cc.u-tokai.ac.jp) Sep 21, 2004:
+*        First free version of this software published.
+*    Naohiko Shimizu (nshimizu^ip-arch.jp), Nov. 24, 2011:
+*	Convert to NSL
+*
+*
+*/
+
+#include "define.nsl"
+#include "alu11.nsl"
+
+declare data11 {
+  input    dbi[16];
+  output   dbo[16], dba[16], opc[16], psw[16];
+  func_in
+  inc2, dec2, inc, dec, clr, com, neg, adc, sbc, tst,
+  ror, rol, asr, asl, sxt, mov, cmp, bit, bic, bis,
+  add, sub, exor, swab, mmu;
+  func_in
+  setopc, dbiDst, dbiSrc, dbiPC, dbiReg, dbiPS,
+  dbaPC, dbaSP, dbaDst, dbaSrc, dbaAdr, dboSEL,
+  dboDst, dboSrc, dboAdr,
+  pcALU1, spALU1, dstALU1, srcALU1, dstALU2, srcALU2, adrALU1, ofs8ALU2, ofs6ALU2, selALU1,
+  regSEL, regSEL2, setReg, setReg2,
+  ALUreg, DSTreg, PCreg, SRCreg, ADRreg,
+  ALUpc, ALUsp, ALUdst, ALUdstb, ALUsrc, ALUcc, SELdst, SELsrc, SELadr, SELpc,
+  DSTadr, SRCadr, adrPC, save_stat,
+  FPpc, dbiFP, setPCrom;
+  func_in change_opr, change_mode, kernel_mode, reset_byte, vectorPS;
+  func_in ccclr, ccset, cctaken;
+  func_in buserr, err, bpt, emt, iot, svc, segerr;
+  func_in spl, ccget;
+  func_in clrADR, oddReg, mul, ash, ashc;
+  func_in div, div_end, div_ini0, div_ini1, div_ini2, div_fin0, div_fin1, tstSRC, tstSRCADR;
+  func_out ashdone;
+  output  alucc[4];
+  output  taken;
+}
+
+module data11 {
+
+  reg PC[16]=0;
+  reg R0[16]=0, R1[16]=0, R2[16]=0, R3[16]=0, R4[16]=0, R5[16]=0;
+  reg kSP[16]=0, uSP[16]=0;
+  reg OPC_BYTE=0, OPC[15]=0, SRC[16]=0, DST[16]=0, ADR[16]=0;
+  reg cmode[2]=0, pmode[2]=0, priority[3]=0, trapbit=0, fn=0, fz=0, fv=0, fc=0;
+  reg multmp=0, dividen=0, divider=0;
+
+  wire ALU1[16], ALU2[16], REGsel[16], REGin[16], mul_HI[16];
+
+  alu11 alu;
+
+  {
+    opc = {OPC_BYTE , OPC};
+    psw = {cmode,pmode,(0x0),priority,trapbit,fn,fz,fv,fc};
+    alu.ni = fn;
+    alu.ci = fc;
+    alu.bi = OPC_BYTE;
+  }
+
+  func setPCrom PC := 0xe000;
+
+  func spl priority := OPC[2:0];
+
+  func ALUcc any {
+    alu.ccmask[3]: fn := alu.ccout[3];
+    alu.ccmask[2]: fz := alu.ccout[2];
+    alu.ccmask[1]: fv := alu.ccout[1];
+    alu.ccmask[0]: fc := alu.ccout[0];
+  }
+  func ccget alucc = alu.ccout;
+  func ccset any {
+    OPC[3]: fn := OPC[4];
+    OPC[2]: fz := OPC[4];
+    OPC[1]: fv := OPC[4];
+    OPC[0]: fc := OPC[4];
+  }
+  func cctaken taken =
+    ( (({OPC_BYTE,OPC[10:9]})==0o0)                             )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o1) & (~OPC[8] ^ fz )           )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o2) & (~OPC[8] ^ (fn^fv) )      )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o3) & (~OPC[8] ^ ((fn^fv)|fz) ) )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o4) & (~OPC[8] ^ fn )           )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o5) & (~OPC[8] ^ (fc|fz) )      )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o6) & (~OPC[8] ^ fv )           )|
+    ( (({OPC_BYTE,OPC[10:9]})==0o7) & (~OPC[8] ^ fc )           );
+
+  func setopc { OPC_BYTE := dbi[15]; OPC := dbi[14:00]; }
+  func dbiDst DST := dbi;
+  func dbiSrc SRC := dbi;
+  func dbiPC  PC  := dbi;
+  func dbiFP  R5  := dbi;
+  func dbiReg REGin = dbi;
+  func dbiPS {
+    cmode := dbi[15:14];
+    pmode := dbi[13:12];
+    priority := dbi[7:5];
+    trapbit := dbi[4];
+    fn := dbi[3];
+    fz := dbi[2];
+    fv := dbi[1];
+    fc := dbi[0];
+  }
+  func vectorPS {
+    priority := dbi[7:5];
+    trapbit := dbi[4];
+    fn := dbi[3];
+    fz := dbi[2];
+    fv := dbi[1];
+    fc := dbi[0];
+  }
+  func save_stat {
+    DST := {cmode,pmode,(0x0),priority,trapbit,fn,fz,fv,fc};
+    ADR := PC;
+  }
+  func dbaPC  dba = PC;
+  func dbaSP any {
+    (~|cmode): dba = kSP;
+    ( &cmode): dba = uSP;
+  }
+  func dbaDst dba = DST;
+  func dbaSrc dba = SRC;
+  func dbaAdr dba = ADR;
+  func dboSEL dbo = REGsel;
+  func dboDst dbo = DST;
+  func dboSrc dbo = SRC;
+  func dboAdr dbo = ADR;
+  func pcALU1 ALU1 = PC;
+  func spALU1 any {
+    (~|cmode): ALU1 = kSP;
+    ( &cmode): ALU1 = uSP;
+  }
+  func dstALU1 ALU1 = DST;
+  func srcALU1 ALU1 = SRC;
+  func adrALU1 ALU1 = ADR;
+  func dstALU2 ALU2 = DST;
+  func srcALU2 ALU2 = SRC;
+  func ofs8ALU2 ALU2 = {7#opc[7] , opc[7:0] , 0b0};
+  func ofs6ALU2 ALU2 = {0x00 , 0b0 , opc[5:0] , 0b0};
+  func selALU1 ALU1 = REGsel;
+  func regSEL any {
+    OPC[2:0] == 0o0: REGsel = R0;
+    OPC[2:0] == 0o1: REGsel = R1;
+    OPC[2:0] == 0o2: REGsel = R2;
+    OPC[2:0] == 0o3: REGsel = R3;
+    OPC[2:0] == 0o4: REGsel = R4;
+    OPC[2:0] == 0o5: REGsel = R5;
+    OPC[2:0] == 0o7: REGsel = PC;
+    ((OPC[2:0] == 0o6) &~|cmode): REGsel = kSP;
+    ((OPC[2:0] == 0o6) & &cmode): REGsel = uSP;
+  }
+  func regSEL2 any {
+    OPC[8:6] == 0o0: REGsel = R0;
+    OPC[8:6] == 0o1: REGsel = R1;
+    OPC[8:6] == 0o2: REGsel = R2;
+    OPC[8:6] == 0o3: REGsel = R3;
+    OPC[8:6] == 0o4: REGsel = R4;
+    OPC[8:6] == 0o5: REGsel = R5;
+    OPC[8:6] == 0o7: REGsel = PC;
+    ((OPC[8:6] == 0o6) &~|cmode): REGsel = kSP;
+    ((OPC[8:6] == 0o6) & &cmode): REGsel = uSP;
+  }
+  func setReg any {
+    OPC[2:0] == 0o0: R0 := REGin;
+    OPC[2:0] == 0o1: R1 := REGin;
+    OPC[2:0] == 0o2: R2 := REGin;
+    OPC[2:0] == 0o3: R3 := REGin;
+    OPC[2:0] == 0o4: R4 := REGin;
+    OPC[2:0] == 0o5: R5 := REGin;
+    OPC[2:0] == 0o7: PC := REGin;
+    ((OPC[2:0] == 0o6) &~|cmode): kSP := REGin;
+    ((OPC[2:0] == 0o6) & &cmode): uSP := REGin;
+  }
+  func setReg2 any {
+    OPC[8:6] == 0o0: R0 := REGin;
+    OPC[8:6] == 0o1: R1 := REGin;
+    OPC[8:6] == 0o2: R2 := REGin;
+    OPC[8:6] == 0o3: R3 := REGin;
+    OPC[8:6] == 0o4: R4 := REGin;
+    OPC[8:6] == 0o5: R5 := REGin;
+    OPC[8:6] == 0o7: PC := REGin;
+    ((OPC[8:6] == 0o6) &~|cmode): kSP := REGin;
+    ((OPC[8:6] == 0o6) & &cmode): uSP := REGin;
+  }
+  func ALUreg REGin = alu.out;
+  func DSTreg REGin = DST;
+  func SRCreg REGin = SRC;
+  func ADRreg REGin = ADR;
+  func PCreg  REGin = PC;
+  func FPpc  PC := R5;
+  func ALUpc PC := alu.out;
+  func ALUsp any {
+    (~|cmode): kSP := alu.out;
+    ( &cmode): uSP := alu.out;
+  }
+  func ALUdst DST := alu.out;
+  func ALUdstb any {
+   ( OPC_BYTE): DST := {DST[15:8] , alu.out[7:0]};
+   (~OPC_BYTE): DST := alu.out;
+  }
+  func ALUsrc SRC := alu.out;
+  func SELdst DST := REGsel;
+  func SELsrc SRC := REGsel;
+  func SELadr ADR := REGsel;
+  func SELpc  PC  := REGsel;
+  func DSTadr ADR := DST;
+  func SRCadr ADR := SRC;
+  func adrPC  PC := ADR;
+  func reset_byte OPC_BYTE := 0b0;
+  func change_opr OPC := {OPC[14:12] , OPC[5:0] , OPC[11:06]};
+  func change_mode { pmode := cmode; cmode := pmode; }
+  func kernel_mode { cmode := 0b00; pmode := cmode; }
+
+  func buserr SRC := TRAP_BUS;
+  func segerr SRC := TRAP_SEG;
+  func err SRC := TRAP_ERR;
+  func bpt SRC := TRAP_BPT;
+  func emt SRC := TRAP_EMT;
+  func iot SRC := TRAP_IOT;
+  func svc SRC := TRAP_SVC;
+
+  func inc2 alu.inc2(ALU1);
+  func dec2 alu.dec2(ALU1);
+  func inc alu.inc(ALU1);
+  func dec alu.dec(ALU1);
+  func clr alu.clr(ALU1);
+  func com alu.com(ALU1);
+  func neg alu.neg(ALU1);
+  func adc alu.adc(ALU1);
+  func sbc alu.sbc(ALU1);
+  func tst alu.tst(ALU1);
+  func mmu alu.mmu(ALU1);
+  func ror alu.ror(ALU1);
+  func rol alu.rol(ALU1);
+  func asr alu.asr(ALU1);
+  func asl alu.asl(ALU1);
+  func sxt alu.sxt(ALU1);
+  func mov alu.mov(ALU1);
+  func cmp alu.cmp(ALU1,ALU2);
+  func bit alu.bit(ALU1,ALU2);
+  func bic alu.bic(ALU1,ALU2);
+  func bis alu.bis(ALU1,ALU2);
+  func add alu.add(ALU1,ALU2);
+  func exor alu.exor(ALU1,ALU2);
+  func swab alu.swab(ALU1);
+  func sub alu.sub(ALU1,ALU2);
+
+  func oddReg OPC := {OPC[14:07],~OPC[6],OPC[5:0]};
+  func clrADR { ADR := 0x0000; multmp := 0b0; }
+
+  func tstSRC {
+    fn := SRC[15];
+    fz := ~|SRC;
+  }
+
+  func tstSRCADR {
+    fz := ~|({ADR,SRC});
+  }
+
+  func mul {
+    any {
+      {SRC[0],multmp} == 0b00: mul_HI = ADR;
+      {SRC[0],multmp} == 0b01: mul_HI = alu.add(ADR,DST).out;
+      {SRC[0],multmp} == 0b10: mul_HI = alu.sub(ADR,DST).out;
+      {SRC[0],multmp} == 0b11: mul_HI = ADR;
+    }
+    multmp := SRC[0];
+    SRC := {mul_HI[0],SRC[15:01]};
+    ADR := {mul_HI[15],mul_HI[15:01]};
+    fn := mul_HI[15];
+    fc := ~(&mul_HI[15:1] | ~|mul_HI[15:1]);
+    fv := 0b0;
+  }
+
+  func div_ini0 {
+    divider := DST[15];
+    if(DST[15]) DST := alu.neg(DST).out;
+    if(~DST[15]) {
+      alu.tst(DST);
+      if(~alu.ccout[2]) { fc := 0b0; fv := 0b0; }
+      if( alu.ccout[2]) { fc := 0b1; fv := 0b1; }
+    }
+  }
+  func div_ini1 {
+    if(SRC[15]) ADR := alu.neg(ADR).out;
+    dividen := SRC[15];
+    fv := alu.ccout[2]; /* dividen negate borrow */
+  }
+  func div_ini2 any {
+    dividen & fv: SRC := alu.neg(SRC).out;
+    dividen &~fv: SRC := alu.com(SRC).out;
+  }
+  func div_fin0 any {
+    (~dividen & divider)|
+    ( dividen &~divider): SRC := alu.neg(SRC).out;
+  }
+  func div_fin1 any {
+    ( dividen &~divider)|
+    ( dividen & divider): ADR := alu.neg(ADR).out;
+  }
+
+  func div {
+    alu.sub(SRC,DST);
+    if(alu.out[15]) {
+      if(~div_end) SRC := {SRC[14:0],ADR[15]};
+      if( div_end) fv := |ADR[15:14];
+      ADR := {ADR[14:0],0b0};
+    }
+    if(~alu.out[15]) {
+      if(~div_end) SRC := {alu.out[14:0],ADR[15]};
+      if( div_end) SRC := alu.out;
+      if( div_end) fv := ADR[15];
+      ADR := {ADR[14:0],0b1};
+/*
+      fv := |({alu.out,ADR[15]});
+*/
+    }
+  }
+
+  func ash any {
+    (DST[5:0] == 0o00): ashdone();
+    ~(DST[5:0] == 0o00): any {
+      DST[5]: {
+        DST := alu.inc(DST).out;
+        SRC := {SRC[15],SRC[15:01]};
+        fc := SRC[0];
+        fv := SRC[15]^SRC[14];
+      }
+      ~DST[5]: {
+        DST := alu.dec(DST).out;
+        SRC := {SRC[14:00],0b0};
+        fc := SRC[15];
+        fv := SRC[15]^SRC[14];
+      }
+    }
+  }
+
+  func ashc any {
+    (DST[5:0] == 0o00): ashdone();
+    ~(DST[5:0] == 0o00): any {
+      DST[5]: {
+        DST := alu.inc(DST).out;
+        SRC := {SRC[15],SRC[15:01]};
+        ADR := {SRC[00],ADR[15:01]};
+        fc := ADR[0];
+        fn := SRC[15];
+        fv := SRC[15]^SRC[14];
+      }
+      ~DST[5]: {
+        DST := alu.dec(DST).out;
+        SRC := {SRC[14:00],ADR[15]};
+        ADR := {ADR[14:00],0b0};
+        fc := SRC[15];
+        fn := SRC[14];
+        fv := SRC[15]^SRC[14];
+      }
+    }
+  }
+}

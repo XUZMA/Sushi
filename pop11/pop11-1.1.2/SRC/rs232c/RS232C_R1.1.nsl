@@ -1,0 +1,146 @@
+/*
+Copyright (c) Yoshihiro Iida, Tokai University, Shimizu Lab., Japan.
+(http://shimizu-lab.dt.u-tokai.ac.jp)
+This software is the property of Tokai University, Shimizu Lab., Japan.
+
+The POP-11 is free set of files; you can use it, redistribute it
+and/or modify it under the following terms:
+
+1. You are not allowed to remove or modify this copyright notice
+   and License paragraphs, even if parts of the software is used.
+2. The improvements and/or extentions you make SHALL be available
+   for the community under THIS license, source code included.
+   Improvements or extentions, including adaptions to new architectures/languages,
+   SHALL be reported and transmitted to Tokai University, Shimizu Lab., Japan.
+3. You must cause the modified files to carry prominent notices stating
+   that you changed the files, what you did and the date of changes.
+4. You may NOT distribute this set of files under another license without
+   explisit permission from Tokai University, Shimizu Lab., Japan.
+5. This set of files is free, and distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+   You SHALL NOT use this software unless you accept to carry all
+   risk and cost of defects or limitations.
+
+*/
+/*
+#include "dec4.nsl"
+#include "inc3.nsl"
+*/
+declare RS232C_R{
+	input		txd;
+	output		cts;
+	output		stat;
+	output		data[8];
+	func_in		get;
+	func_in		do;
+}	
+	
+module RS232C_R{
+
+	reg		clk[4];
+	reg		recv_buf[8];
+	reg		rs232_bit[3]=0;
+	reg		valid=1;
+
+	dec4		icount;
+	inc3		bcount;
+	
+	proc_name recieve();
+	
+	{
+		cts = valid;
+		stat = ~valid;
+	}	
+
+	func get {
+		valid := 0b1; 
+		data = recv_buf;
+	}
+
+	func do {
+		recieve();
+	}	
+
+	proc recieve{
+		state_name	waiting, init, idle, recv, stop;
+		first_state	waiting;
+		state waiting {
+			any{
+				txd:;
+				~txd:{
+					clk := 0b0110;
+					goto init;
+				}
+			}
+			finish;
+		}
+
+		state init {
+			any{
+				|clk:clk := icount.do(clk).out;
+				~(|clk):{
+					clk := 0b1110;
+					goto idle;
+				}
+			}
+
+			finish;
+		}	
+
+		state idle {
+			any{
+				|clk:clk := icount.do(clk).out;
+				~(|clk):goto recv;
+			}
+			finish;
+		}
+
+		state recv {
+
+			rs232_bit := bcount.do(rs232_bit).out;
+			any{
+				~rs232_bit[2]&~rs232_bit[1]&~rs232_bit[0]:/* 0rs232_bit */
+					recv_buf := {0b0000000,txd};
+				~rs232_bit[2]&~rs232_bit[1]&rs232_bit[0]:/* 1rs232_bit */
+					recv_buf := {0b000000,txd,recv_buf[0]};
+				~rs232_bit[2]&rs232_bit[1]&~rs232_bit[0]:/* 2rs232_bit */
+					recv_buf := {0b00000,txd,recv_buf[1:0]};
+				~rs232_bit[2]&rs232_bit[1]&rs232_bit[0]:/* 3rs232_bit */
+					recv_buf := {0b0000,txd,recv_buf[2:0]};
+				rs232_bit[2]&~rs232_bit[1]&~rs232_bit[0]:/* 4rs232_bit */
+					recv_buf := {0b000,txd,recv_buf[3:0]};
+				rs232_bit[2]&~rs232_bit[1]&rs232_bit[0]:/* 5rs232_bit */
+					recv_buf := {0b00,txd,recv_buf[4:0]};
+				rs232_bit[2]&rs232_bit[1]&~rs232_bit[0]:/* 6rs232_bit */
+					recv_buf := {0b0,txd,recv_buf[5:0]};
+				rs232_bit[2]&rs232_bit[1]&rs232_bit[0]:/* 7rs232_bit */
+					recv_buf := {txd,recv_buf[6:0]};
+			}
+
+			any{
+				~(&rs232_bit):{
+					clk := 0b1110;
+					goto idle;
+				}	
+				&rs232_bit:{
+					clk := 0b1111;
+					goto stop;
+				}
+			}
+			finish;
+		}
+
+		state stop {
+			any{
+				|clk:clk := icount.do(clk).out;
+				~(|clk):{
+					valid := ~txd;
+					goto waiting;
+				}
+			}
+			finish;
+		}
+	}
+}	
+			

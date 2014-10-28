@@ -1,0 +1,9 @@
+2011-11-24  Naohiko Shimizu <nshimizu@ip-arch.jp>
+	* Convert to NSL
+
+2004-10-15  Yoshihiro Iida  <3aepm001@keyaki.cc.u-tokai.ac.jp>
+	* Fix bug for simulation: Disable clock divider for simulation.
+
+2004-10-4  Yoshihiro Iida  <3aepm001@keyaki.cc.u-tokai.ac.jp>
+
+	* pop11-1.0 is released: First release of POP-11 by Yoshihiro Iida.
